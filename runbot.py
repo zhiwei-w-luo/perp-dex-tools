@@ -3,7 +3,6 @@
 EdgeX Futures Trading Bot - Using Official EdgeX Python SDK
 """
 
-import sys
 import os
 import time
 import csv
@@ -27,12 +26,12 @@ dotenv.load_dotenv()
 @dataclass
 class TradingConfig:
     """Configuration class for trading parameters."""
-    contract_id: str = '10000002'  # EdgeX contract ID (ETH-USDT equivalent)
-    quantity: float = 0.1
-    take_profit: float = 0.9
-    direction: str = 'buy'
-    max_orders: int = 40
-    wait_time: int = 450
+    contract_id: str
+    quantity: float
+    take_profit: float
+    direction: str
+    max_orders: int
+    wait_time: int
 
     @property
     def close_order_side(self) -> str:
@@ -63,8 +62,7 @@ class TradingLogger:
         self.contract_id = contract_id
         self.log_file = f"{contract_id}_transactions_log.csv"
         self.debug_log_file = f"{contract_id}_bot_activity.log"
-        # Force Europe/Paris timezone for logging timestamps
-        self.timezone = pytz.timezone('Europe/Paris')
+        self.timezone = pytz.timezone(os.getenv('TIMEZONE', 'Asia/Shanghai'))
         self.logger = self._setup_logger(log_to_console)
 
     def _setup_logger(self, log_to_console: bool) -> logging.Logger:
@@ -186,20 +184,20 @@ class EdgeXTradingBot:
         """Perform graceful shutdown of the trading bot."""
         self.logger.log(f"Starting graceful shutdown: {reason}", "INFO")
         self.shutdown_requested = True
-        
+
         try:
             # Close HTTP client session first
             if hasattr(self, 'client') and self.client:
                 self.logger.log("Closing HTTP client session...", "INFO")
                 await self.client.close()
-            
+
             # Disconnect WebSocket connections
             if hasattr(self, 'ws_manager'):
                 self.logger.log("Disconnecting WebSocket connections...", "INFO")
                 self.ws_manager.disconnect_all()
-            
+
             self.logger.log("Graceful shutdown completed", "INFO")
-            
+
         except Exception as e:
             self.logger.log(f"Error during graceful shutdown: {e}", "ERROR")
             self.logger.log(f"Traceback: {traceback.format_exc()}", "ERROR")
@@ -816,7 +814,8 @@ class EdgeXTradingBot:
                     self.logger.log("###### ERROR ###### ERROR ###### ERROR ###### ERROR #####\n", "ERROR")
                     self.logger.log("Please manually rebalance your position and take-profit orders", "ERROR")
                     self.logger.log("请手动平衡当前仓位和正在关闭的仓位", "ERROR")
-                    self.logger.log(f"current position: {position_amt} | active closing amount: {active_close_amount}\n", "ERROR")
+                    self.logger.log(
+                        f"current position: {position_amt} | active closing amount: {active_close_amount}\n", "ERROR")
                     self.logger.log("###### ERROR ###### ERROR ###### ERROR ###### ERROR #####", "ERROR")
                     if not self.shutdown_requested:
                         self.shutdown_requested = True
@@ -891,7 +890,7 @@ class EdgeXTradingBot:
                     await self.client.close()
             except Exception as e:
                 self.logger.log(f"Error closing HTTP client session: {e}", "ERROR")
-            
+
             try:
                 # Close WebSocket connections
                 if hasattr(self, 'ws_manager'):
