@@ -44,7 +44,7 @@ class EdgeXClient(BaseExchangeClient):
         )
 
         # Initialize logger using the same format as helpers
-        self.logger = TradingLogger(contract_id="edgex", log_to_console=False)
+        self.logger = TradingLogger(exchange="edgex", contract_id=self.config.contract_id, log_to_console=False)
 
         self._order_update_handler = None
 

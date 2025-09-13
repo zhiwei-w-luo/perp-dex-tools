@@ -53,7 +53,7 @@ class TradingBot:
 
     def __init__(self, config: TradingConfig):
         self.config = config
-        self.logger = TradingLogger(config.contract_id, log_to_console=True)
+        self.logger = TradingLogger(config.exchange, config.contract_id, log_to_console=True)
 
         # Create exchange client
         try:
