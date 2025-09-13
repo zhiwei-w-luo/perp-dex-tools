@@ -10,6 +10,7 @@ from typing import Dict, Any, List, Optional
 from edgex_sdk import Client, OrderSide, WebSocketManager, CancelOrderParams, GetOrderBookDepthParams, GetActiveOrderParams
 
 from .base import BaseExchangeClient, OrderResult, OrderInfo
+from helpers.logger import TradingLogger
 
 
 class EdgeXClient(BaseExchangeClient):
@@ -42,6 +43,9 @@ class EdgeXClient(BaseExchangeClient):
             stark_pri_key=self.stark_private_key
         )
 
+        # Initialize logger using the same format as helpers
+        self.logger = TradingLogger(contract_id="edgex", log_to_console=False)
+
         self._order_update_handler = None
 
     def _validate_config(self) -> None:
@@ -54,6 +58,8 @@ class EdgeXClient(BaseExchangeClient):
     async def connect(self) -> None:
         """Connect to EdgeX WebSocket."""
         self.ws_manager.connect_private()
+        # Wait a moment for connection to establish
+        await asyncio.sleep(2)
 
     async def disconnect(self) -> None:
         """Disconnect from EdgeX."""
@@ -63,7 +69,7 @@ class EdgeXClient(BaseExchangeClient):
             if hasattr(self, 'ws_manager'):
                 self.ws_manager.disconnect_all()
         except Exception as e:
-            print(f"Error during EdgeX disconnect: {e}")
+            self.logger.log(f"Error during EdgeX disconnect: {e}", "ERROR")
 
     def get_exchange_name(self) -> str:
         """Get the exchange name."""
@@ -81,11 +87,10 @@ class EdgeXClient(BaseExchangeClient):
                     message = json.loads(message)
 
                 # Check if this is a trade-event with ORDER_UPDATE
-                if (message.get('type') == 'trade-event' and
-                        message.get('content', {}).get('event') == 'ORDER_UPDATE'):
-
+                content = message.get("content", {})
+                event = content.get("event", "")
+                if event == "ORDER_UPDATE":
                     # Extract order data from the nested structure
-                    content = message.get('content', {})
                     data = content.get('data', {})
                     orders = data.get('order', [])
 
@@ -94,23 +99,47 @@ class EdgeXClient(BaseExchangeClient):
                         order_id = order.get('id')
                         status = order.get('status')
                         side = order.get('side', '').lower()
+                        filled_size = order.get('cumMatchSize')
 
-                        if self._order_update_handler:
-                            self._order_update_handler({
-                                'order_id': order_id,
-                                'side': side,
-                                'status': status,
-                                'size': order.get('size'),
-                                'price': order.get('price'),
-                                'contract_id': order.get('contractId')
-                            })
+                        if side == self.config.close_order_side:
+                            order_type = "CLOSE"
+                        else:
+                            order_type = "OPEN"
+
+                        # edgex returns TWO filled events for the same order; take the first one
+                        if status == "FILLED" and len(data.get('collateral', [])):
+                            return
+
+                        # ignore canceled close orders
+                        if status == "CANCELED" and order_type == "CLOSE":
+                            return
+
+                        # edgex returns partially filled events as "OPEN" orders
+                        if status == "OPEN" and filled_size != '0':
+                            status = "PARTIALLY_FILLED"
+
+                        if status in ['OPEN', 'PARTIALLY_FILLED', 'FILLED', 'CANCELED']:
+                            if self._order_update_handler:
+                                self._order_update_handler({
+                                    'order_id': order_id,
+                                    'side': side,
+                                    'order_type': order_type,
+                                    'status': status,
+                                    'size': order.get('size'),
+                                    'price': order.get('price'),
+                                    'contract_id': order.get('contractId'),
+                                    'filled_size': filled_size
+                                })
 
             except Exception as e:
-                print(f"Error handling order update: {e}")
-                print(f"Traceback: {traceback.format_exc()}")
+                self.logger.log(f"Error handling order update: {e}", "ERROR")
+                self.logger.log(f"Traceback: {traceback.format_exc()}", "ERROR")
 
-        # Subscribe to order updates
-        self.ws_manager.subscribe_order_update(order_update_handler)
+        try:
+            private_client = self.ws_manager.get_private_client()
+            private_client.on_message("trade-event", order_update_handler)
+        except Exception as e:
+            self.logger.log(f"Could not add trade-event handler: {e}", "ERROR")
 
     async def place_open_order(self, contract_id: str, quantity: float, direction: str) -> OrderResult:
         """Place an open order with EdgeX using official SDK with retry logic for POST_ONLY rejections."""
