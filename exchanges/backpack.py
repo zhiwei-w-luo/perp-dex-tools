@@ -447,8 +447,12 @@ class BackpackClient(BaseExchangeClient):
 
             if not cancel_result:
                 return OrderResult(success=False, error_message='Failed to cancel order')
-
-            filled_size = cancel_result.get('executedQuantity', 0)
+            if 'code' in cancel_result:
+                self.logger.log(
+                    f"[CLOSE] Failed to cancel order {order_id}: {cancel_result.get('message', 'Unknown error')}", "ERROR")
+                filled_size = self.config.quantity
+            else:
+                filled_size = cancel_result.get('executedQuantity', 0)
             return OrderResult(success=True, filled_size=filled_size)
 
         except Exception as e:
@@ -514,10 +518,15 @@ class BackpackClient(BaseExchangeClient):
         except Exception:
             return []
 
-    async def get_account_positions(self) -> Dict[str, Any]:
+    async def get_account_positions(self) -> float:
         """Get account positions using official SDK."""
         try:
-            positions = self.account_client.get_open_positions()
-            return positions
+            positions_data = self.account_client.get_open_positions()
+            position_amt = 0
+            for position in positions_data:
+                if position.get('symbol', '') == self.config.contract_id:
+                    position_amt = abs(float(position.get('netQuantity', 0)))
+                    break
+            return position_amt
         except Exception:
-            return {}
+            return 0

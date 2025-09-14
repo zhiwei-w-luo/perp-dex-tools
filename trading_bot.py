@@ -296,28 +296,7 @@ class TradingBot:
                         })
 
                 # Get positions
-                positions_data = await self.exchange_client.get_account_positions()
-
-                if not positions_data or 'data' not in positions_data:
-                    self.logger.log("No positions or failed to get positions", "WARNING")
-                    position_amt = 0
-                else:
-                    # The API returns positions under data.positionList
-                    positions = positions_data.get('data', {}).get('positionList', [])
-                    if positions:
-                        # Find position for current contract
-                        position = None
-                        for p in positions:
-                            if isinstance(p, dict) and p.get('contractId') == self.config.contract_id:
-                                position = p
-                                break
-
-                        if position:
-                            position_amt = abs(float(position.get('openSize', 0)))
-                        else:
-                            position_amt = 0
-                    else:
-                        position_amt = 0
+                position_amt = await self.exchange_client.get_account_positions()
 
                 # Calculate active closing amount
                 active_close_amount = sum(

@@ -82,7 +82,7 @@ class BaseExchangeClient(ABC):
         pass
 
     @abstractmethod
-    async def get_account_positions(self) -> Dict[str, Any]:
+    async def get_account_positions(self) -> float:
         """Get account positions."""
         pass
 
