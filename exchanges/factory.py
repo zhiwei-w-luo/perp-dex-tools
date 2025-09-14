@@ -5,6 +5,7 @@ Exchange factory for creating exchange clients dynamically.
 from typing import Dict, Any
 from .base import BaseExchangeClient
 from .edgex import EdgeXClient
+from .backpack import BackpackClient
 
 
 class ExchangeFactory:
@@ -12,6 +13,7 @@ class ExchangeFactory:
 
     _registered_exchanges = {
         'edgex': EdgeXClient,
+        'backpack': BackpackClient,
     }
 
     @classmethod

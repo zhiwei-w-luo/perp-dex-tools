@@ -14,6 +14,14 @@ EDGEX_WS_URL=wss://quote.edgex.exchange
 # EDGEX_BASE_URL=https://testnet.edgex.exchange
 # EDGEX_WS_URL=wss://quote-testnet.edgex.exchange
 
+# Backpack Configuration
+# Get these from your Backpack account settings
+
+# Backpack Account Credentials (REQUIRED for API access)
+# Find these in your Backpack account under "API Keys" or "Account Settings"
+BACKPACK_PUBLIC_KEY=your_public_key_here
+BACKPACK_SECRET_KEY=your_secret_key_here
+
 # Logging
 LOG_TO_CONSOLE=true
 LOG_TO_FILE=true

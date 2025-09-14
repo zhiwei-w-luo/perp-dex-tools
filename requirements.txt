@@ -9,5 +9,10 @@ pycryptodome>=3.15.0
 ecdsa>=0.17.0
 requests==2.32.5
 
+# Backpack Trading Bot Dependencies
+websockets>=12.0
+cryptography>=41.0.0
+bpx-py==2.0.11
+
 # Forked edgeX official python sdk with post_only limit order
 git+https://github.com/your-quantguy/edgex-python-sdk.git@30050b3a64e1535a0e6259b24b105bd62ab44b47#egg=edgex-python-sdk

@@ -18,6 +18,7 @@ class OrderResult:
     price: Optional[float] = None
     status: Optional[str] = None
     error_message: Optional[str] = None
+    filled_size: Optional[float] = None
 
 
 @dataclass

@@ -21,7 +21,7 @@ def parse_arguments():
 
     # Trading parameters
     parser.add_argument('--contract-id', type=str, default='10000002',
-                        help='Contract ID (default: 10000002 for ETH-USDT)')
+                        help='Contract ID (default: 10000002 for ETH-USDT on EdgeX, ETH_USDC_PERP for Backpack)')
     parser.add_argument('--quantity', type=float, default=0.1,
                         help='Order quantity (default: 0.1)')
     parser.add_argument('--take-profit', type=float, default=0.9,

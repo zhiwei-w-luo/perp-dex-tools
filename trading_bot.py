@@ -167,7 +167,7 @@ class TradingBot:
         elif len(self.active_close_orders) / self.config.max_orders >= 1/6:
             cool_down_time = self.config.wait_time / 2
         else:
-            cool_down_time = 60
+            cool_down_time = self.config.wait_time / 4
 
         if time.time() - self.last_open_order_time > cool_down_time:
             return 0
@@ -245,15 +245,15 @@ class TradingBot:
             except Exception as e:
                 self.logger.log(f"[CLOSE] Error canceling order {order_id}: {e}", "ERROR")
 
-            # Wait for cancel event or timeout
-            if not self.order_canceled_event.is_set():
-                try:
-                    await asyncio.wait_for(self.order_canceled_event.wait(), timeout=5)
-                except asyncio.TimeoutError:
-                    self.order_filled_amount = self.config.quantity
-
-            self.logger.log(f"[OPEN] [{order_id}] Order placed and PARTIALLY FILLED: "
-                            f"{self.order_filled_amount} @ {filled_price}", "INFO")
+            if self.config.exchange == "backpack":
+                self.order_filled_amount = float(cancel_result.filled_size)
+            else:
+                # Wait for cancel event or timeout
+                if not self.order_canceled_event.is_set():
+                    try:
+                        await asyncio.wait_for(self.order_canceled_event.wait(), timeout=5)
+                    except asyncio.TimeoutError:
+                        self.order_filled_amount = self.config.quantity
 
             if self.order_filled_amount > 0:
                 close_side = self.config.close_order_side
@@ -299,7 +299,7 @@ class TradingBot:
                 positions_data = await self.exchange_client.get_account_positions()
 
                 if not positions_data or 'data' not in positions_data:
-                    self.logger.log("Failed to get positions", "WARNING")
+                    self.logger.log("No positions or failed to get positions", "WARNING")
                     position_amt = 0
                 else:
                     # The API returns positions under data.positionList
