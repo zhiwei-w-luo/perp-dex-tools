@@ -113,6 +113,8 @@ class BackpackWebSocketManager:
 
             if 'orderUpdate' in stream:
                 await self._handle_order_update(payload)
+            else:
+                self.logger.log(f"Unknown WebSocket message: {data}", "ERROR")
 
         except Exception as e:
             if self.logger:
