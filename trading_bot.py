@@ -106,8 +106,9 @@ class TradingBot:
                 side = message.get('side', '')
                 order_type = message.get('order_type', '')
                 filled_size = round(float(message.get('filled_size')), 2)
+                if order_type == "OPEN":
+                    self.current_order_status = status
 
-                self.current_order_status = status
                 if status == 'FILLED':
                     if order_type == "OPEN":
                         # Ensure thread-safe interaction with asyncio event loop
@@ -190,8 +191,6 @@ class TradingBot:
                 self.logger.log(f"Failed to place order: {order_result.error_message}", "ERROR")
                 return False
 
-            self.last_open_order_time = time.time()
-
             # Wait for fill or timeout
             if not self.order_filled_event.is_set():
                 try:
@@ -211,7 +210,8 @@ class TradingBot:
         order_id = order_result.order_id
         filled_price = order_result.price
 
-        if self.current_order_status == 'FILLED':
+        if self.order_filled_event.is_set():
+            self.last_open_order_time = time.time()
             # Place close order
             close_side = self.config.close_order_side
             if close_side == 'sell':
@@ -234,6 +234,7 @@ class TradingBot:
         elif self.current_order_status in ['OPEN', 'PARTIALLY_FILLED']:
             self.order_canceled_event.clear()
             # Cancel the order if it's still open
+            self.logger.log(f"[OPEN] [{order_id}] Trying to cancel order", "INFO")
             try:
                 cancel_result = await self.exchange_client.cancel_order(order_id)
                 if not cancel_result.success:
@@ -267,6 +268,7 @@ class TradingBot:
                     close_price,
                     close_side
                 )
+                self.last_open_order_time = time.time()
 
                 if not close_order_result.success:
                     self.logger.log(f"[CLOSE] Failed to place close order: {close_order_result.error_message}", "ERROR")

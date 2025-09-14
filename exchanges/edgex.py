@@ -115,7 +115,7 @@ class EdgeXClient(BaseExchangeClient):
                             return
 
                         # edgex returns partially filled events as "OPEN" orders
-                        if status == "OPEN" and filled_size != '0':
+                        if status == "OPEN" and float(filled_size) > 0:
                             status = "PARTIALLY_FILLED"
 
                         if status in ['OPEN', 'PARTIALLY_FILLED', 'FILLED', 'CANCELED']:
