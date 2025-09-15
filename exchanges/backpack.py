@@ -8,7 +8,8 @@ import json
 import time
 import base64
 import sys
-from typing import Dict, Any, List, Optional
+from decimal import Decimal
+from typing import Dict, Any, List, Optional, Tuple
 from cryptography.hazmat.primitives.asymmetric import ed25519
 import websockets
 from bpx.public import Public
@@ -168,20 +169,6 @@ class BackpackClient(BaseExchangeClient):
             secret_key=self.secret_key
         )
 
-        # Initialize WebSocket manager
-        self.ws_manager = BackpackWebSocketManager(
-            public_key=self.public_key,
-            secret_key=self.secret_key,
-            symbol=self.config.contract_id,  # Use contract_id as symbol for Backpack
-            order_update_callback=self._handle_websocket_order_update
-        )
-        # Pass config to WebSocket manager for order type determination
-        self.ws_manager.config = self.config
-
-        # Initialize logger using the same format as helpers
-        self.logger = TradingLogger(exchange="backpack", contract_id=self.config.contract_id, log_to_console=False)
-        self.ws_manager.set_logger(self.logger)
-
         self._order_update_handler = None
 
     def _validate_config(self) -> None:
@@ -193,6 +180,20 @@ class BackpackClient(BaseExchangeClient):
 
     async def connect(self) -> None:
         """Connect to Backpack WebSocket."""
+        # Initialize WebSocket manager
+        self.ws_manager = BackpackWebSocketManager(
+            public_key=self.public_key,
+            secret_key=self.secret_key,
+            symbol=self.config.contract_id,  # Use contract_id as symbol for Backpack
+            order_update_callback=self._handle_websocket_order_update
+        )
+        # Pass config to WebSocket manager for order type determination
+        self.ws_manager.config = self.config
+
+        # Initialize logger using the same format as helpers
+        self.logger = TradingLogger(exchange="backpack", ticker=self.config.ticker, log_to_console=False)
+        self.ws_manager.set_logger(self.logger)
+
         try:
             # Start WebSocket connection in background task
             asyncio.create_task(self.ws_manager.connect())
@@ -282,7 +283,7 @@ class BackpackClient(BaseExchangeClient):
         except Exception as e:
             self.logger.log(f"Error handling WebSocket order update: {e}", "ERROR")
 
-    async def place_open_order(self, contract_id: str, quantity: float, direction: str) -> OrderResult:
+    async def place_open_order(self, contract_id: str, quantity: Decimal, direction: str) -> OrderResult:
         """Place an open order with Backpack using official SDK with retry logic for POST_ONLY rejections."""
         max_retries = 15
         retry_count = 0
@@ -304,23 +305,20 @@ class BackpackClient(BaseExchangeClient):
                 return OrderResult(success=False, error_message='No bid/ask data available')
 
             # Best bid is the highest price someone is willing to buy at
-            best_bid = float(bids[0][0]) if bids and len(bids) > 0 else 0
+            best_bid = Decimal(bids[0][0]) if bids and len(bids) > 0 else 0
             # Best ask is the lowest price someone is willing to sell at
-            best_ask = float(asks[0][0]) if asks and len(asks) > 0 else 0
+            best_ask = Decimal(asks[0][0]) if asks and len(asks) > 0 else 0
 
             if best_bid <= 0 or best_ask <= 0:
                 return OrderResult(success=False, error_message='Invalid bid/ask prices')
 
-            # Calculate order price based on direction
-            price_delta = 0.1  # Use a small price delta for ETH
-
             if direction == 'buy':
                 # For buy orders, place slightly below best ask to ensure execution
-                order_price = best_ask - price_delta
+                order_price = best_ask - self.config.tick_size
                 side = 'Bid'
             else:
                 # For sell orders, place slightly above best bid to ensure execution
-                order_price = best_bid + price_delta
+                order_price = best_bid + self.config.tick_size
                 side = 'Ask'
 
             # Place the order using Backpack SDK (post-only to ensure maker order)
@@ -329,7 +327,7 @@ class BackpackClient(BaseExchangeClient):
                 side=side,
                 order_type=OrderTypeEnum.LIMIT,
                 quantity=str(quantity),
-                price=str(round(order_price, 2)),
+                price=str(self.round_to_tick(order_price)),
                 post_only=True,
                 time_in_force=TimeInForceEnum.GTC
             )
@@ -360,7 +358,7 @@ class BackpackClient(BaseExchangeClient):
 
         return OrderResult(success=False, error_message='Max retries exceeded')
 
-    async def place_close_order(self, contract_id: str, quantity: float, price: float, side: str) -> OrderResult:
+    async def place_close_order(self, contract_id: str, quantity: Decimal, price: Decimal, side: str) -> OrderResult:
         """Place a close order with Backpack using official SDK with retry logic for POST_ONLY rejections."""
         max_retries = 15
         retry_count = 0
@@ -381,33 +379,33 @@ class BackpackClient(BaseExchangeClient):
                 return OrderResult(success=False, error_message='No bid/ask data available')
 
             # Get best bid and ask prices
-            best_bid = float(bids[0][0]) if bids and len(bids) > 0 else 0
-            best_ask = float(asks[0][0]) if asks and len(asks) > 0 else 0
+            best_bid = Decimal(bids[0][0]) if bids and len(bids) > 0 else 0
+            best_ask = Decimal(asks[0][0]) if asks and len(asks) > 0 else 0
 
             if best_bid <= 0 or best_ask <= 0:
                 return OrderResult(success=False, error_message='Invalid bid/ask prices')
 
             # Adjust order price based on market conditions and side
             adjusted_price = price
-            price_delta = 0.01
             if side.lower() == 'sell':
                 order_side = 'Ask'
                 # For sell orders, ensure price is above best bid to be a maker order
                 if price <= best_bid:
-                    adjusted_price = best_bid + price_delta
+                    adjusted_price = best_bid + self.config.tick_size
             elif side.lower() == 'buy':
                 order_side = 'Bid'
                 # For buy orders, ensure price is below best ask to be a maker order
                 if price >= best_ask:
-                    adjusted_price = best_ask - price_delta
+                    adjusted_price = best_ask - self.config.tick_size
 
+            adjusted_price = self.round_to_tick(adjusted_price)
             # Place the order using Backpack SDK (post-only to avoid taker fees)
             order_result = self.account_client.execute_order(
                 symbol=contract_id,
                 side=order_side,
                 order_type=OrderTypeEnum.LIMIT,
                 quantity=str(quantity),
-                price=str(round(adjusted_price, 2)),
+                price=str(adjusted_price),
                 post_only=True,
                 time_in_force=TimeInForceEnum.GTC
             )
@@ -454,7 +452,7 @@ class BackpackClient(BaseExchangeClient):
                     f"[CLOSE] Failed to cancel order {order_id}: {cancel_result.get('message', 'Unknown error')}", "ERROR")
                 filled_size = self.config.quantity
             else:
-                filled_size = cancel_result.get('executedQuantity', 0)
+                filled_size = Decimal(cancel_result.get('executedQuantity', 0))
             return OrderResult(success=True, filled_size=filled_size)
 
         except Exception as e:
@@ -476,11 +474,11 @@ class BackpackClient(BaseExchangeClient):
             return OrderInfo(
                 order_id=order_result.get('id', ''),
                 side=order_result.get('side', '').lower(),
-                size=float(order_result.get('quantity', 0)),
-                price=float(order_result.get('price', 0)),
+                size=Decimal(order_result.get('quantity', 0)),
+                price=Decimal(order_result.get('price', 0)),
                 status=order_result.get('status', ''),
-                filled_size=float(order_result.get('executedQuantity', 0)),
-                remaining_size=float(order_result.get('quantity', 0)) - float(order_result.get('executedQuantity', 0))
+                filled_size=Decimal(order_result.get('executedQuantity', 0)),
+                remaining_size=Decimal(order_result.get('quantity', 0)) - Decimal(order_result.get('executedQuantity', 0))
             )
 
         except Exception:
@@ -508,11 +506,11 @@ class BackpackClient(BaseExchangeClient):
                     orders.append(OrderInfo(
                         order_id=order.get('id', ''),
                         side=side,
-                        size=float(order.get('quantity', 0)),
-                        price=float(order.get('price', 0)),
+                        size=Decimal(order.get('quantity', 0)),
+                        price=Decimal(order.get('price', 0)),
                         status=order.get('status', ''),
-                        filled_size=float(order.get('executedQuantity', 0)),
-                        remaining_size=float(order.get('quantity', 0)) - float(order.get('executedQuantity', 0))
+                        filled_size=Decimal(order.get('executedQuantity', 0)),
+                        remaining_size=Decimal(order.get('quantity', 0)) - Decimal(order.get('executedQuantity', 0))
                     ))
 
             return orders
@@ -520,15 +518,45 @@ class BackpackClient(BaseExchangeClient):
         except Exception:
             return []
 
-    async def get_account_positions(self) -> float:
+    async def get_account_positions(self) -> Decimal:
         """Get account positions using official SDK."""
         try:
             positions_data = self.account_client.get_open_positions()
             position_amt = 0
             for position in positions_data:
                 if position.get('symbol', '') == self.config.contract_id:
-                    position_amt = abs(float(position.get('netQuantity', 0)))
+                    position_amt = abs(Decimal(position.get('netQuantity', 0)))
                     break
             return position_amt
         except Exception:
             return 0
+
+    async def get_contract_attributes(self) -> Tuple[str, Decimal]:
+        """Get contract ID for a ticker."""
+        ticker = self.config.ticker
+        if len(ticker) == 0:
+            self.logger.log("Ticker is empty", "ERROR")
+            raise ValueError("Ticker is empty")
+
+        markets = self.public_client.get_markets()
+        for market in markets:
+            if (market.get('marketType', '') == 'PERP' and market.get('baseSymbol', '') == ticker and
+                    market.get('quoteSymbol', '') == 'USDC'):
+                self.config.contract_id = market.get('symbol', '')
+                min_quantity = Decimal(market.get('filters', {}).get('quantity', {}).get('minQuantity', 0))
+                self.config.tick_size = Decimal(market.get('filters', {}).get('price', {}).get('tickSize', 0))
+                break
+
+        if self.config.contract_id == '':
+            self.logger.log("Failed to get contract ID for ticker", "ERROR")
+            raise ValueError("Failed to get contract ID for ticker")
+
+        if self.config.quantity < min_quantity:
+            self.logger.log(f"Order quantity is less than min quantity: {self.config.quantity} < {min_quantity}", "ERROR")
+            raise ValueError(f"Order quantity is less than min quantity: {self.config.quantity} < {min_quantity}")
+
+        if self.config.tick_size == 0:
+            self.logger.log("Failed to get tick size for ticker", "ERROR")
+            raise ValueError("Failed to get tick size for ticker")
+
+        return self.config.contract_id, self.config.tick_size
