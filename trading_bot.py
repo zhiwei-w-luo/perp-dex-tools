@@ -179,6 +179,7 @@ class TradingBot:
         try:
             # Reset state before placing order
             self.order_filled_event.clear()
+            self.current_order_status = 'OPEN'
 
             # Place the order
             order_result = await self.exchange_client.place_open_order(
