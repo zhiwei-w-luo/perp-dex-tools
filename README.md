@@ -56,13 +56,13 @@
 ETH：
 
 ```bash
-python runbot.py --exchange edgex --contract-id 10000002 --quantity 0.1 --take-profit 0.9 --max-orders 40 --wait-time 450
+python runbot.py --exchange edgex --ticker ETH --quantity 0.1 --take-profit 0.02 --max-orders 40 --wait-time 450
 ```
 
 BTC：
 
 ```bash
-python runbot.py --exchange edgex --contract-id 10000001 --quantity 0.05 --take-profit 30 --max-orders 40 --wait-time 450
+python runbot.py --exchange edgex --ticker BTC --quantity 0.05 --take-profit 0.02 --max-orders 40 --wait-time 450
 ```
 
 ### Backpack 交易所：
@@ -70,7 +70,7 @@ python runbot.py --exchange edgex --contract-id 10000001 --quantity 0.05 --take-
 ETH 永续合约：
 
 ```bash
-python runbot.py --exchange backpack --contract-id ETH_USDC_PERP --quantity 0.1 --take-profit 0.9 --max-orders 40 --wait-time 450
+python runbot.py --exchange backpack --ticker ETH --quantity 0.1 --take-profit 0.02 --max-orders 40 --wait-time 450
 ```
 
 ## 配置
@@ -92,9 +92,9 @@ python runbot.py --exchange backpack --contract-id ETH_USDC_PERP --quantity 0.1 
 ### 命令行参数
 
 - `--exchange`: 使用的交易所：'edgex'或'backpack'（默认：edgex）
-- `--contract-id`: 合约 ID（默认：EdgeX 为 10000002 ETH-USDT）
+- `--ticker`: 标的资产符号（例如：ETH、BTC、SOL）。合约 ID 自动解析。
 - `--quantity`: 订单数量（默认：0.1）
-- `--take-profit`: 止盈金额（USDT）（默认：0.9）
+- `--take-profit`: 止盈百分比（例如 0.02 表示 0.02%）
 - `--direction`: 交易方向：'buy'或'sell'（默认：buy）
 - `--max-orders`: 最大活跃订单数（默认：40）
 - `--wait-time`: 订单间等待时间（秒）（默认：450）

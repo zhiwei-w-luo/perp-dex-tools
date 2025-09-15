@@ -56,13 +56,13 @@ By using my EdgeX referral, you will enjoy the following benefits:
 ETH:
 
 ```bash
-python runbot.py --exchange edgex --contract-id 10000002 --quantity 0.1 --take-profit 0.9 --max-orders 40 --wait-time 450
+python runbot.py --exchange edgex --ticker ETH --quantity 0.1 --take-profit 0.02 --max-orders 40 --wait-time 450
 ```
 
 BTC:
 
 ```bash
-python runbot.py --exchange edgex --contract-id 10000001 --quantity 0.05 --take-profit 30 --max-orders 40 --wait-time 450
+python runbot.py --exchange edgex --ticker BTC --quantity 0.05 --take-profit 0.02 --max-orders 40 --wait-time 450
 ```
 
 ### Backpack Exchange:
@@ -70,7 +70,7 @@ python runbot.py --exchange edgex --contract-id 10000001 --quantity 0.05 --take-
 ETH Perpetual:
 
 ```bash
-python runbot.py --exchange backpack --contract-id ETH_USDC_PERP --quantity 0.1 --take-profit 0.9 --max-orders 40 --wait-time 450
+python runbot.py --exchange backpack --ticker ETH --quantity 0.1 --take-profit 0.02 --max-orders 40 --wait-time 450
 ```
 
 ## Configuration
@@ -92,9 +92,9 @@ python runbot.py --exchange backpack --contract-id ETH_USDC_PERP --quantity 0.1 
 ### Command Line Arguments
 
 - `--exchange`: Exchange to use: 'edgex' or 'backpack' (default: edgex)
-- `--contract-id`: Contract ID (default: 10000002 for ETH-USDT on EdgeX, ETH_USDC_PERP for Backpack)
+- `--ticker`: Base asset symbol (e.g., ETH, BTC, SOL). Contract ID is auto-resolved.
 - `--quantity`: Order quantity (default: 0.1)
-- `--take-profit`: Take profit in USDT (default: 0.9)
+- `--take-profit`: Take profit percent (e.g., 0.02 means 0.02%)
 - `--direction`: Trading direction: 'buy' or 'sell' (default: buy)
 - `--max-orders`: Maximum number of active orders (default: 40)
 - `--wait-time`: Wait time between orders in seconds (default: 450)
