@@ -42,9 +42,8 @@ class BaseExchangeClient(ABC):
         self.config = config
         self._validate_config()
 
-    def round_to_tick(self, price: str | Decimal) -> Decimal:
-        if not isinstance(price, Decimal):
-            price = Decimal(price)
+    def round_to_tick(self, price) -> Decimal:
+        price = Decimal(price)
 
         tick = self.config.tick_size
         # quantize forces price to be a multiple of tick
