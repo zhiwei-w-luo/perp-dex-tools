@@ -1,235 +1,194 @@
-# Multi-Exchange Trading Bot
+# 交易机器人
 
-A modular trading bot that supports multiple exchanges including EdgeX and Backpack. The bot implements an automated strategy that places orders and automatically closes them at a profit.
+一个支持多个交易所（目前包括 EdgeX 和 Backpack）的模块化交易机器人。该机器人实现了自动下单并在盈利时自动平仓的策略。
 
-## Referral Link
+## 邀请链接
 
-Use my referral link to sign up:  
+### EdgeX 交易所
+
+使用我的推荐链接注册：  
 👉 [https://pro.edgex.exchange/referral/QUANT](https://pro.edgex.exchange/referral/QUANT)
 
-By using my referral, you will enjoy the following benefits:
+使用我的 EdgeX 推荐链接，享受以下优惠：
 
-1. **Instant VIP 1 Trading Fees** – get upgraded directly to VIP 1 fee rates.
-2. **10% Fee Rebate** – automatically settled every 24 hours and claimable directly on the EdgeX website.
-   - This rebate is on top of the VIP 1 fee rate, which means your effective trading fee becomes:
+1. **即时 VIP 1 交易费率** – 直接升级到 VIP 1 费率。
+2. **10%手续费返佣** – 每 24 小时自动结算，可直接在 EdgeX 网站上领取。
+   - 此返佣是在 VIP 1 费率基础上的额外优惠，这意味着您的实际交易费率变为：
      ```
      0.013% * 0.9 = 0.0117%
      ```
-3. **10% Bonus Points** – extra points credited to your account.
+3. **10%奖励积分** – 额外积分将记入您的账户。
 
-## Sample commands:
+### Backpack 交易所
 
-### EdgeX Exchange:
+**30%手续费返佣** – 使用我的 Backpack 推荐链接，您将获得所有交易费用的 30% 自动返佣：
+👉 [https://backpack.exchange/join/quant](https://backpack.exchange/join/quant)
 
-ETH:
+## 安装
 
-```bash
-python runbot.py --exchange edgex --quantity 0.1 --take-profit 0.9 --max-orders 40 --wait-time 450
-```
-
-BTC:
-
-```bash
-python runbot.py --exchange edgex --contract-id 10000001 --quantity 0.05 --take-profit 30 --max-orders 40 --wait-time 450
-```
-
-### Backpack Exchange:
-
-ETH Perpetual:
-
-```bash
-python runbot.py --exchange backpack --contract-id ETH_USDC_PERP --quantity 0.1 --take-profit 0.9 --max-orders 40 --wait-time 450
-```
-
-## Architecture
-
-The bot is built with a modular architecture supporting multiple exchanges:
-
-### 1. Exchange Clients
-
-#### EdgeX Client (Official SDK)
-
-- REST API client for EdgeX using the official SDK
-- Handles authentication and API requests
-- Manages order placement, cancellation, and status queries
-- Position and account information retrieval
-
-#### Backpack Client (Official SDK)
-
-- REST API client for Backpack using the official BPX SDK
-- Handles authentication and API requests
-- Manages order placement, cancellation, and status queries
-- Position and account information retrieval
-
-### 2. WebSocket Managers
-
-#### EdgeX WebSocket Manager (Official SDK)
-
-- WebSocket connection management using the official SDK
-- Real-time market data streaming
-- Order update notifications
-- Automatic connection handling
-
-#### Backpack WebSocket Manager
-
-- WebSocket connection management for Backpack
-- Real-time order update notifications
-- ED25519 signature authentication
-- Automatic connection handling
-
-### 3. Main Trading Bot (`runbot.py`)
-
-- Core scalping logic
-- Order placement and monitoring
-- Position management
-- Main trading loop
-- Multi-exchange support
-
-## Installation
-
-1. **Clone the repository**:
+1. **克隆仓库**：
 
    ```bash
    git clone <repository-url>
-   cd edgex
+   cd perp-dex-tools
    ```
 
-2. **Create and activate virtual environment**:
+2. **创建并激活虚拟环境**：
 
    ```bash
    python3 -m venv env
-   source env/bin/activate  # On Windows: env\Scripts\activate
+   source env/bin/activate  # Windows: env\Scripts\activate
    ```
 
-3. **Install dependencies**:
+3. **安装依赖**：
 
    ```bash
    pip install -r requirements.txt
    ```
 
-4. **Set up environment variables**:
-   Use the env_example.txt to create a `.env` file in the project root.
+4. **设置环境变量**：
+   使用 env_example.txt 在项目根目录创建`.env`文件。
 
-## Configuration
+## 示例命令：
 
-### Environment Variables
+### EdgeX 交易所：
 
-#### EdgeX Configuration
-
-- `EDGEX_ACCOUNT_ID`: Your EdgeX account ID
-- `EDGEX_STARK_PRIVATE_KEY`: Your EdgeX api private key
-- `EDGEX_BASE_URL`: EdgeX API base URL (default: https://pro.edgex.exchange)
-- `EDGEX_WS_URL`: EdgeX WebSocket URL (default: wss://quote.edgex.exchange)
-
-#### Backpack Configuration
-
-- `BACKPACK_PUBLIC_KEY`: Your Backpack public key
-- `BACKPACK_SECRET_KEY`: Your Backpack secret key (base64 encoded)
-
-### Command Line Arguments
-
-- `--exchange`: Exchange to use: 'edgex' or 'backpack' (default: edgex)
-- `--contract-id`: Contract ID (default: 10000002 for ETH-USDT on EdgeX, ETH_USDC_PERP for Backpack)
-- `--quantity`: Order quantity (default: 0.1)
-- `--take-profit`: Take profit in USDT (default: 0.9)
-- `--direction`: Trading direction: 'buy' or 'sell' (default: buy)
-- `--max-orders`: Maximum number of active orders (default: 40)
-- `--wait-time`: Wait time between orders in seconds (default: 450)
-
-## Usage
-
-### Basic Usage
+ETH：
 
 ```bash
-# EdgeX (default)
-python runbot.py
-
-# Backpack
-python runbot.py --exchange backpack --contract-id ETH_USDC_PERP
+python runbot.py --exchange edgex --contract-id 10000002 --quantity 0.1 --take-profit 0.9 --max-orders 40 --wait-time 450
 ```
 
-### With Custom Parameters
+BTC：
 
 ```bash
-# EdgeX with custom parameters
-python runbot.py \
-  --exchange edgex \
-  --contract-id 10000001 \
-  --quantity 0.001 \
-  --take-profit 0.5 \
-  --direction buy \
-  --max-orders 5 \
-  --wait-time 60
-
-# Backpack with custom parameters
-python runbot.py \
-  --exchange backpack \
-  --contract-id ETH_USDC_PERP \
-  --quantity 0.1 \
-  --take-profit 0.9 \
-  --direction buy \
-  --max-orders 10 \
-  --wait-time 300
+python runbot.py --exchange edgex --contract-id 10000001 --quantity 0.05 --take-profit 30 --max-orders 40 --wait-time 450
 ```
 
-## Trading Strategy
+### Backpack 交易所：
 
-The bot implements a simple scalping strategy:
+ETH 永续合约：
 
-1. **Order Placement**: Places a limit order slightly above/below market price
-2. **Order Monitoring**: Waits for the order to be filled
-3. **Close Order**: Automatically places a close order at the take profit level
-4. **Position Management**: Monitors positions and active orders
-5. **Risk Management**: Limits maximum number of concurrent orders
+```bash
+python runbot.py --exchange backpack --contract-id ETH_USDC_PERP --quantity 0.1 --take-profit 0.9 --max-orders 40 --wait-time 450
+```
 
-## Logging
+## 配置
 
-The bot provides comprehensive logging:
+### 环境变量
 
-- **Transaction Logs**: CSV files with order details
-- **Debug Logs**: Detailed activity logs with timestamps
-- **Console Output**: Real-time status updates
-- **Error Handling**: Comprehensive error logging and handling
+#### EdgeX 配置
 
-## Safety Features
+- `EDGEX_ACCOUNT_ID`: 您的 EdgeX 账户 ID
+- `EDGEX_STARK_PRIVATE_KEY`: 您的 EdgeX API 私钥
+- `EDGEX_BASE_URL`: EdgeX API 基础 URL（默认：https://pro.edgex.exchange）
+- `EDGEX_WS_URL`: EdgeX WebSocket URL（默认：wss://quote.edgex.exchange）
 
-- **Order Limits**: Configurable maximum order count
-- **Timeout Handling**: Automatic order cancellation on timeouts
-- **Position Monitoring**: Continuous position and order status checking
-- **Error Recovery**: Graceful handling of API errors and disconnections
+#### Backpack 配置
 
-## Dependencies
+- `BACKPACK_PUBLIC_KEY`: 您的 Backpack 公钥
+- `BACKPACK_SECRET_KEY`: 您的 Backpack 私钥（base64 编码）
 
-- `edgex-python-sdk`: Official EdgeX Python SDK
-- `bpx`: Official Backpack Python SDK
-- `websockets`: WebSocket support for Backpack
-- `cryptography`: ED25519 signature support for Backpack
-- `python-dotenv`: Environment variable management
-- `pytz`: Timezone handling
-- `asyncio`: Asynchronous programming support
-- `aiohttp`: HTTP client for async operations
-- `websocket-client`: WebSocket support for EdgeX
+### 命令行参数
 
-## Contributing
+- `--exchange`: 使用的交易所：'edgex'或'backpack'（默认：edgex）
+- `--contract-id`: 合约 ID（默认：EdgeX 为 10000002 ETH-USDT）
+- `--quantity`: 订单数量（默认：0.1）
+- `--take-profit`: 止盈金额（USDT）（默认：0.9）
+- `--direction`: 交易方向：'buy'或'sell'（默认：buy）
+- `--max-orders`: 最大活跃订单数（默认：40）
+- `--wait-time`: 订单间等待时间（秒）（默认：450）
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
+## 架构
 
-## License
+该机器人采用支持多个交易所的模块化架构：
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+### 1. 交易所客户端
 
-## Disclaimer
+#### EdgeX 客户端（官方 SDK）
 
-This software is for educational and research purposes only. Trading cryptocurrencies involves significant risk and can result in substantial financial losses. Use at your own risk and never trade with money you cannot afford to lose.
+- 使用官方 SDK 的 EdgeX REST API 客户端
+- 处理身份验证和 API 请求
+- 管理订单下单、取消和状态查询
+- 获取持仓和账户信息
 
-## Support
+#### Backpack 客户端（官方 SDK）
 
-For issues related to:
+- 使用官方 BPX SDK 的 Backpack REST API 客户端
+- 处理身份验证和 API 请求
+- 管理订单下单、取消和状态查询
+- 获取持仓和账户信息
 
-- **EdgeX API**: Check the [EdgeX API documentation](https://docs.edgex.exchange)
-- **EdgeX SDK**: Check the [EdgeX Python SDK documentation](https://github.com/edgex-Tech/edgex-python-sdk)
-- **This Bot**: Open an issue in this repository
+### 2. WebSocket 管理器
+
+#### EdgeX WebSocket 管理器（官方 SDK）
+
+- 使用官方 SDK 的 WebSocket 连接管理
+- 实时市场数据流
+- 订单更新通知
+- 自动连接处理
+
+#### Backpack WebSocket 管理器
+
+- Backpack 的 WebSocket 连接管理
+- 实时订单更新通知
+- ED25519 签名身份验证
+- 自动连接处理
+
+### 3. 主交易机器人（`runbot.py`）
+
+- 核心剥头皮策略逻辑
+- 订单下单和监控
+- 持仓管理
+- 主交易循环
+- 多交易所支持
+
+## 交易策略
+
+该机器人实现了简单的剥头皮策略：
+
+1. **订单下单**：在市场价格附近下限价单
+2. **订单监控**：等待订单成交
+3. **平仓订单**：在止盈水平自动下平仓单
+4. **持仓管理**：监控持仓和活跃订单
+5. **风险管理**：限制最大并发订单数
+
+## 日志记录
+
+该机器人提供全面的日志记录：
+
+- **交易日志**：包含订单详情的 CSV 文件
+- **调试日志**：带时间戳的详细活动日志
+- **控制台输出**：实时状态更新
+- **错误处理**：全面的错误日志记录和处理
+
+## 安全功能
+
+- **订单限制**：可配置的最大订单数量
+- **超时处理**：超时时自动取消订单
+- **持仓监控**：持续监控持仓和订单状态
+- **错误恢复**：优雅处理 API 错误和断开连接
+
+## 贡献
+
+1. Fork 仓库
+2. 创建功能分支
+3. 进行更改
+4. 如适用，添加测试
+5. 提交拉取请求
+
+## 许可证
+
+本项目采用 MIT 许可证 - 详情请参阅[LICENSE](LICENSE)文件。
+
+## 免责声明
+
+本软件仅供教育和研究目的。加密货币交易涉及重大风险，可能导致重大财务损失。使用风险自负，切勿用您无法承受损失的资金进行交易。
+
+## 支持
+
+相关问题：
+
+- **EdgeX API**：查看[EdgeX API 文档](https://docs.edgex.exchange)
+- **EdgeX SDK**：查看[EdgeX Python SDK 文档](https://github.com/edgex-Tech/edgex-python-sdk)
+- **此机器人**：在此仓库中提交问题
