@@ -6,6 +6,7 @@ import time
 import asyncio
 import traceback
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Optional
 import dotenv
 
@@ -18,9 +19,11 @@ dotenv.load_dotenv()
 @dataclass
 class TradingConfig:
     """Configuration class for trading parameters."""
+    ticker: str
     contract_id: str
-    quantity: float
-    take_profit: float
+    quantity: Decimal
+    take_profit: Decimal
+    tick_size: Decimal
     direction: str
     max_orders: int
     wait_time: int
@@ -37,8 +40,8 @@ class OrderMonitor:
     """Thread-safe order monitoring state."""
     order_id: Optional[str] = None
     filled: bool = False
-    filled_price: Optional[float] = None
-    filled_qty: float = 0.0
+    filled_price: Optional[Decimal] = None
+    filled_qty: Decimal = 0.0
 
     def reset(self):
         """Reset the monitor state."""
@@ -53,7 +56,7 @@ class TradingBot:
 
     def __init__(self, config: TradingConfig):
         self.config = config
-        self.logger = TradingLogger(config.exchange, config.contract_id, log_to_console=True)
+        self.logger = TradingLogger(config.exchange, config.ticker, log_to_console=True)
 
         # Create exchange client
         try:
@@ -90,7 +93,6 @@ class TradingBot:
 
         except Exception as e:
             self.logger.log(f"Error during graceful shutdown: {e}", "ERROR")
-            self.logger.log(f"Traceback: {traceback.format_exc()}", "ERROR")
 
     def _setup_websocket_handlers(self):
         """Setup WebSocket handlers for order updates."""
@@ -105,7 +107,7 @@ class TradingBot:
                 status = message.get('status')
                 side = message.get('side', '')
                 order_type = message.get('order_type', '')
-                filled_size = round(float(message.get('filled_size')), 2)
+                filled_size = Decimal(message.get('filled_size'))
                 if order_type == "OPEN":
                     self.current_order_status = status
 
@@ -148,7 +150,7 @@ class TradingBot:
         # Setup order update handler
         self.exchange_client.setup_order_update_handler(order_update_handler)
 
-    def _calculate_wait_time(self) -> float:
+    def _calculate_wait_time(self) -> Decimal:
         """Calculate wait time between orders."""
         cool_down_time = self.config.wait_time
 
@@ -180,6 +182,7 @@ class TradingBot:
             # Reset state before placing order
             self.order_filled_event.clear()
             self.current_order_status = 'OPEN'
+            self.order_filled_amount = 0.0
 
             # Place the order
             order_result = await self.exchange_client.place_open_order(
@@ -204,6 +207,7 @@ class TradingBot:
 
         except Exception as e:
             self.logger.log(f"Error placing order: {e}", "ERROR")
+            self.logger.log(f"Traceback: {traceback.format_exc()}", "ERROR")
             return False
 
     async def _handle_order_result(self, order_result) -> bool:
@@ -216,9 +220,9 @@ class TradingBot:
             # Place close order
             close_side = self.config.close_order_side
             if close_side == 'sell':
-                close_price = filled_price + self.config.take_profit
+                close_price = filled_price * (1 + self.config.take_profit/100)
             else:
-                close_price = filled_price - self.config.take_profit
+                close_price = filled_price * (1 - self.config.take_profit/100)
 
             close_order_result = await self.exchange_client.place_close_order(
                 self.config.contract_id,
@@ -232,10 +236,10 @@ class TradingBot:
 
             return True
 
-        elif self.current_order_status in ['OPEN', 'PARTIALLY_FILLED']:
+        else:
             self.order_canceled_event.clear()
             # Cancel the order if it's still open
-            self.logger.log(f"[OPEN] [{order_id}] Trying to cancel order", "INFO")
+            self.logger.log(f"[OPEN] [{order_id}] Order time out, trying to cancel order", "INFO")
             try:
                 cancel_result = await self.exchange_client.cancel_order(order_id)
                 if not cancel_result.success:
@@ -247,21 +251,22 @@ class TradingBot:
                 self.logger.log(f"[CLOSE] Error canceling order {order_id}: {e}", "ERROR")
 
             if self.config.exchange == "backpack":
-                self.order_filled_amount = float(cancel_result.filled_size)
+                self.order_filled_amount = cancel_result.filled_size
             else:
                 # Wait for cancel event or timeout
                 if not self.order_canceled_event.is_set():
                     try:
                         await asyncio.wait_for(self.order_canceled_event.wait(), timeout=5)
                     except asyncio.TimeoutError:
-                        self.order_filled_amount = self.config.quantity
+                        order_info = await self.exchange_client.get_order_info(order_id)
+                        self.order_filled_amount = order_info.filled_size
 
             if self.order_filled_amount > 0:
                 close_side = self.config.close_order_side
                 if close_side == 'sell':
-                    close_price = filled_price + self.config.take_profit
+                    close_price = filled_price * (1 + self.config.take_profit/100)
                 else:
-                    close_price = filled_price - self.config.take_profit
+                    close_price = filled_price * (1 - self.config.take_profit/100)
 
                 close_order_result = await self.exchange_client.place_close_order(
                     self.config.contract_id,
@@ -301,12 +306,10 @@ class TradingBot:
 
                 # Calculate active closing amount
                 active_close_amount = sum(
-                    float(order.get('size', 0))
+                    Decimal(order.get('size', 0))
                     for order in self.active_close_orders
                     if isinstance(order, dict)
                 )
-
-                active_close_amount = round(active_close_amount, 2)
 
                 self.logger.log(f"Current Position: {position_amt} | Active closing amount: {active_close_amount}")
                 self.last_log_time = time.time()
@@ -337,6 +340,8 @@ class TradingBot:
     async def run(self):
         """Main trading loop."""
         try:
+            self.config.contract_id, self.config.tick_size = await self.exchange_client.get_contract_attributes()
+
             # Capture the running event loop for thread-safe callbacks
             self.loop = asyncio.get_running_loop()
             # Connect to exchange
@@ -374,7 +379,6 @@ class TradingBot:
             await self.graceful_shutdown("User interruption (Ctrl+C)")
         except Exception as e:
             self.logger.log(f"Critical error: {e}", "ERROR")
-            self.logger.log(traceback.format_exc(), "ERROR")
             await self.graceful_shutdown(f"Critical error: {e}")
             raise
         finally:

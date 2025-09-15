@@ -5,6 +5,7 @@ Modular Trading Bot - Supports multiple exchanges
 
 import argparse
 import asyncio
+from decimal import Decimal
 from trading_bot import TradingBot, TradingConfig
 from exchanges import ExchangeFactory
 
@@ -20,11 +21,11 @@ def parse_arguments():
                              f'Available: {", ".join(ExchangeFactory.get_supported_exchanges())}')
 
     # Trading parameters
-    parser.add_argument('--contract-id', type=str, default='10000002',
-                        help='Contract ID (default: 10000002 for ETH-USDT on EdgeX, ETH_USDC_PERP for Backpack)')
-    parser.add_argument('--quantity', type=float, default=0.1,
+    parser.add_argument('--ticker', type=str, default='ETH',
+                        help='Ticker (default: ETH)')
+    parser.add_argument('--quantity', type=Decimal, default=Decimal(0.1),
                         help='Order quantity (default: 0.1)')
-    parser.add_argument('--take-profit', type=float, default=0.9,
+    parser.add_argument('--take-profit', type=Decimal, default=Decimal(0.9),
                         help='Take profit in USDT (default: 0.9)')
     parser.add_argument('--direction', type=str, default='buy',
                         help='Direction of the bot (default: buy)')
@@ -42,7 +43,9 @@ async def main():
 
     # Create configuration
     config = TradingConfig(
-        contract_id=args.contract_id,
+        ticker=args.ticker,
+        contract_id='',  # will be set in the bot's run method
+        tick_size=Decimal(0),
         quantity=args.quantity,
         take_profit=args.take_profit,
         direction=args.direction,
@@ -58,7 +61,7 @@ async def main():
     except Exception as e:
         print(f"Bot execution failed: {e}")
         # The bot's run method already handles graceful shutdown
-        raise
+        return
 
 
 if __name__ == "__main__":

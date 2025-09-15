@@ -6,7 +6,8 @@ import os
 import asyncio
 import json
 import traceback
-from typing import Dict, Any, List, Optional
+from decimal import Decimal
+from typing import Dict, Any, List, Optional, Tuple
 from edgex_sdk import Client, OrderSide, WebSocketManager, CancelOrderParams, GetOrderBookDepthParams, GetActiveOrderParams
 
 from .base import BaseExchangeClient, OrderResult, OrderInfo
@@ -44,7 +45,7 @@ class EdgeXClient(BaseExchangeClient):
         )
 
         # Initialize logger using the same format as helpers
-        self.logger = TradingLogger(exchange="edgex", contract_id=self.config.contract_id, log_to_console=False)
+        self.logger = TradingLogger(exchange="edgex", ticker=self.config.ticker, log_to_console=False)
 
         self._order_update_handler = None
 
@@ -115,7 +116,7 @@ class EdgeXClient(BaseExchangeClient):
                             return
 
                         # edgex returns partially filled events as "OPEN" orders
-                        if status == "OPEN" and float(filled_size) > 0:
+                        if status == "OPEN" and Decimal(filled_size) > 0:
                             status = "PARTIALLY_FILLED"
 
                         if status in ['OPEN', 'PARTIALLY_FILLED', 'FILLED', 'CANCELED']:
@@ -141,7 +142,7 @@ class EdgeXClient(BaseExchangeClient):
         except Exception as e:
             self.logger.log(f"Could not add trade-event handler: {e}", "ERROR")
 
-    async def place_open_order(self, contract_id: str, quantity: float, direction: str) -> OrderResult:
+    async def place_open_order(self, contract_id: str, quantity: Decimal, direction: str) -> OrderResult:
         """Place an open order with EdgeX using official SDK with retry logic for POST_ONLY rejections."""
         max_retries = 15
         retry_count = 0
@@ -172,33 +173,27 @@ class EdgeXClient(BaseExchangeClient):
                     return OrderResult(success=False, error_message='No bid/ask data available')
 
                 # Best bid is the highest price someone is willing to buy at
-                best_bid = float(bids[0]['price']) if bids and len(bids) > 0 else 0
+                best_bid = Decimal(bids[0]['price']) if bids and len(bids) > 0 else 0
                 # Best ask is the lowest price someone is willing to sell at
-                best_ask = float(asks[0]['price']) if asks and len(asks) > 0 else 0
+                best_ask = Decimal(asks[0]['price']) if asks and len(asks) > 0 else 0
 
                 if best_bid <= 0 or best_ask <= 0:
                     return OrderResult(success=False, error_message='Invalid bid/ask prices')
 
-                # Calculate order price based on direction
-                if contract_id == '10000001':
-                    price_delta = 0.1
-                else:
-                    price_delta = 0.01
-
                 if direction == 'buy':
                     # For buy orders, place slightly below best ask to ensure execution
-                    order_price = best_ask - price_delta
+                    order_price = best_ask - self.config.tick_size
                     side = OrderSide.BUY
                 else:
                     # For sell orders, place slightly above best bid to ensure execution
-                    order_price = best_bid + price_delta
+                    order_price = best_bid + self.config.tick_size
                     side = OrderSide.SELL
 
                 # Place the order using official SDK (post-only to ensure maker order)
                 order_result = await self.client.create_limit_order(
                     contract_id=contract_id,
                     size=str(quantity),
-                    price=str(round(order_price, 2)),
+                    price=str(self.round_to_tick(order_price)),
                     side=side,
                     post_only=True
                 )
@@ -254,7 +249,7 @@ class EdgeXClient(BaseExchangeClient):
 
         return OrderResult(success=False, error_message='Max retries exceeded')
 
-    async def place_close_order(self, contract_id: str, quantity: float, price: float, side: str) -> OrderResult:
+    async def place_close_order(self, contract_id: str, quantity: Decimal, price: Decimal, side: str) -> OrderResult:
         """Place a close order with EdgeX using official SDK with retry logic for POST_ONLY rejections."""
         max_retries = 15
         retry_count = 0
@@ -281,8 +276,8 @@ class EdgeXClient(BaseExchangeClient):
                     return OrderResult(success=False, error_message='No bid/ask data available')
 
                 # Get best bid and ask prices
-                best_bid = float(bids[0]['price']) if bids and len(bids) > 0 else 0
-                best_ask = float(asks[0]['price']) if asks and len(asks) > 0 else 0
+                best_bid = Decimal(bids[0]['price']) if bids and len(bids) > 0 else 0
+                best_ask = Decimal(asks[0]['price']) if asks and len(asks) > 0 else 0
 
                 if best_bid <= 0 or best_ask <= 0:
                     return OrderResult(success=False, error_message='Invalid bid/ask prices')
@@ -292,24 +287,22 @@ class EdgeXClient(BaseExchangeClient):
 
                 # Adjust order price based on market conditions and side
                 adjusted_price = price
-                if contract_id == '10000001':
-                    price_delta = 0.1
-                else:
-                    price_delta = 0.01
+
                 if side.lower() == 'sell':
                     # For sell orders, ensure price is above best bid to be a maker order
                     if price <= best_bid:
-                        adjusted_price = best_bid + price_delta
+                        adjusted_price = best_bid + self.config.tick_size
                 elif side.lower() == 'buy':
                     # For buy orders, ensure price is below best ask to be a maker order
                     if price >= best_ask:
-                        adjusted_price = best_ask - price_delta
+                        adjusted_price = best_ask - self.config.tick_size
 
+                adjusted_price = self.round_to_tick(adjusted_price)
                 # Place the order using official SDK (post-only to avoid taker fees)
                 order_result = await self.client.create_limit_order(
                     contract_id=contract_id,
                     size=str(quantity),
-                    price=str(round(adjusted_price, 2)),
+                    price=str(adjusted_price),
                     side=order_side,
                     post_only=True
                 )
@@ -398,11 +391,11 @@ class EdgeXClient(BaseExchangeClient):
                 return OrderInfo(
                     order_id=order_data.get('id', ''),
                     side=order_data.get('side', '').lower(),
-                    size=float(order_data.get('size', 0)),
-                    price=float(order_data.get('price', 0)),
+                    size=Decimal(order_data.get('size', 0)),
+                    price=Decimal(order_data.get('price', 0)),
                     status=order_data.get('status', ''),
-                    filled_size=float(order_data.get('cumFillSize', 0)),
-                    remaining_size=float(order_data.get('size', 0)) - float(order_data.get('cumFillSize', 0))
+                    filled_size=Decimal(order_data.get('cumMatchSize', 0)),
+                    remaining_size=Decimal(order_data.get('size', 0)) - Decimal(order_data.get('cumMatchSize', 0))
                 )
 
             return None
@@ -430,11 +423,11 @@ class EdgeXClient(BaseExchangeClient):
                     contract_orders.append(OrderInfo(
                         order_id=order.get('id', ''),
                         side=order.get('side', '').lower(),
-                        size=float(order.get('size', 0)),
-                        price=float(order.get('price', 0)),
+                        size=Decimal(order.get('size', 0)),
+                        price=Decimal(order.get('price', 0)),
                         status=order.get('status', ''),
-                        filled_size=float(order.get('cumFillSize', 0)),
-                        remaining_size=float(order.get('size', 0)) - float(order.get('cumFillSize', 0))
+                        filled_size=Decimal(order.get('cumMatchSize', 0)),
+                        remaining_size=Decimal(order.get('size', 0)) - Decimal(order.get('cumMatchSize', 0))
                     ))
 
             return contract_orders
@@ -442,7 +435,7 @@ class EdgeXClient(BaseExchangeClient):
         except Exception:
             return []
 
-    async def get_account_positions(self) -> float:
+    async def get_account_positions(self) -> Decimal:
         """Get account positions using official SDK."""
         try:
             positions_data = await self.client.get_account_positions()
@@ -461,7 +454,7 @@ class EdgeXClient(BaseExchangeClient):
                             break
 
                     if position:
-                        position_amt = abs(float(position.get('openSize', 0)))
+                        position_amt = abs(Decimal(position.get('openSize', 0)))
                     else:
                         position_amt = 0
                 else:
@@ -469,3 +462,41 @@ class EdgeXClient(BaseExchangeClient):
             return position_amt
         except Exception:
             return 0
+
+    async def get_contract_attributes(self) -> Tuple[str, Decimal]:
+        """Get contract ID for a ticker."""
+        ticker = self.config.ticker
+        if len(ticker) == 0:
+            self.logger.log("Ticker is empty", "ERROR")
+            raise ValueError("Ticker is empty")
+
+        response = await self.client.get_metadata()
+        data = response.get('data', {})
+        if not data:
+            self.logger.log("Failed to get metadata", "ERROR")
+            raise ValueError("Failed to get metadata")
+
+        contract_list = data.get('contractList', [])
+        if not contract_list:
+            self.logger.log("Failed to get contract list", "ERROR")
+            raise ValueError("Failed to get contract list")
+
+        current_contract = None
+        for c in contract_list:
+            if c.get('contractName') == ticker+'USD':
+                current_contract = c
+                break
+
+        if not current_contract:
+            self.logger.log("Failed to get contract ID for ticker", "ERROR")
+            raise ValueError("Failed to get contract ID for ticker")
+
+        self.config.contract_id = current_contract.get('contractId')
+        min_quantity = Decimal(current_contract.get('minOrderSize'))
+        if self.config.quantity < min_quantity:
+            self.logger.log(f"Order quantity is less than min quantity: {self.config.quantity} < {min_quantity}", "ERROR")
+            raise ValueError(f"Order quantity is less than min quantity: {self.config.quantity} < {min_quantity}")
+
+        self.config.tick_size = Decimal(current_contract.get('tickSize'))
+
+        return self.config.contract_id, self.config.tick_size

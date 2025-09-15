@@ -6,6 +6,7 @@ All exchange implementations should inherit from this class.
 from abc import ABC, abstractmethod
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
+from decimal import Decimal, ROUND_HALF_UP
 
 
 @dataclass
@@ -14,11 +15,11 @@ class OrderResult:
     success: bool
     order_id: Optional[str] = None
     side: Optional[str] = None
-    size: Optional[float] = None
-    price: Optional[float] = None
+    size: Optional[Decimal] = None
+    price: Optional[Decimal] = None
     status: Optional[str] = None
     error_message: Optional[str] = None
-    filled_size: Optional[float] = None
+    filled_size: Optional[Decimal] = None
 
 
 @dataclass
@@ -26,11 +27,11 @@ class OrderInfo:
     """Standardized order information structure."""
     order_id: str
     side: str
-    size: float
-    price: float
+    size: Decimal
+    price: Decimal
     status: str
-    filled_size: float = 0.0
-    remaining_size: float = 0.0
+    filled_size: Decimal = 0.0
+    remaining_size: Decimal = 0.0
 
 
 class BaseExchangeClient(ABC):
@@ -40,6 +41,14 @@ class BaseExchangeClient(ABC):
         """Initialize the exchange client with configuration."""
         self.config = config
         self._validate_config()
+
+    def round_to_tick(self, price: str | Decimal) -> Decimal:
+        if not isinstance(price, Decimal):
+            price = Decimal(price)
+
+        tick = self.config.tick_size
+        # quantize forces price to be a multiple of tick
+        return price.quantize(tick, rounding=ROUND_HALF_UP)
 
     @abstractmethod
     def _validate_config(self) -> None:
@@ -57,12 +66,12 @@ class BaseExchangeClient(ABC):
         pass
 
     @abstractmethod
-    async def place_open_order(self, contract_id: str, quantity: float, direction: str) -> OrderResult:
+    async def place_open_order(self, contract_id: str, quantity: Decimal, direction: str) -> OrderResult:
         """Place an open order."""
         pass
 
     @abstractmethod
-    async def place_close_order(self, contract_id: str, quantity: float, price: float, side: str) -> OrderResult:
+    async def place_close_order(self, contract_id: str, quantity: Decimal, price: Decimal, side: str) -> OrderResult:
         """Place a close order."""
         pass
 
@@ -82,7 +91,7 @@ class BaseExchangeClient(ABC):
         pass
 
     @abstractmethod
-    async def get_account_positions(self) -> float:
+    async def get_account_positions(self) -> Decimal:
         """Get account positions."""
         pass
 
