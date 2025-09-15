@@ -227,7 +227,7 @@ class BackpackClient(BaseExchangeClient):
             side = order_data.get('S', '')
             quantity = order_data.get('q', '0')
             price = order_data.get('p', '0')
-            fill_quantity = order_data.get('l', '0')
+            fill_quantity = order_data.get('z', '0')
 
             # Only process orders for our symbol
             if symbol != self.config.contract_id:
