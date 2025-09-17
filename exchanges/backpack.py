@@ -303,6 +303,10 @@ class BackpackClient(BaseExchangeClient):
 
             if not bids or not asks:
                 return OrderResult(success=False, error_message='No bid/ask data available')
+            
+            # Sort bids (highest price first) and asks (lowest price first)
+            bids = sorted(bids, key=lambda x: Decimal(x[0]), reverse=True)
+            asks = sorted(asks, key=lambda x: Decimal(x[0]))
 
             # Best bid is the highest price someone is willing to buy at
             best_bid = Decimal(bids[0][0]) if bids and len(bids) > 0 else 0
@@ -313,12 +317,12 @@ class BackpackClient(BaseExchangeClient):
                 return OrderResult(success=False, error_message='Invalid bid/ask prices')
 
             if direction == 'buy':
-                # For buy orders, place slightly below best ask to ensure execution
-                order_price = best_ask - self.config.tick_size
+                # For buy orders, place slightly below best bid to be a maker
+                order_price = best_bid - self.config.tick_size
                 side = 'Bid'
             else:
-                # For sell orders, place slightly above best bid to ensure execution
-                order_price = best_bid + self.config.tick_size
+                # For sell orders, place slightly above best ask to be a maker
+                order_price = best_ask + self.config.tick_size
                 side = 'Ask'
 
             # Place the order using Backpack SDK (post-only to ensure maker order)
@@ -377,6 +381,10 @@ class BackpackClient(BaseExchangeClient):
 
             if not bids or not asks:
                 return OrderResult(success=False, error_message='No bid/ask data available')
+
+            # Sort bids (highest price first) and asks (lowest price first)
+            bids = sorted(bids, key=lambda x: Decimal(x[0]), reverse=True)
+            asks = sorted(asks, key=lambda x: Decimal(x[0]))
 
             # Get best bid and ask prices
             best_bid = Decimal(bids[0][0]) if bids and len(bids) > 0 else 0
