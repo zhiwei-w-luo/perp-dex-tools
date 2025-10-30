@@ -49,6 +49,26 @@ def parse_arguments():
     parser.add_argument('--aster-boost', action='store_true',
                         help='Use the Boost mode for volume boosting')
 
+    # Stop-loss / take-profit thresholds (percent). Example: 0.08 means 0.08%
+    parser.add_argument('--stop-loss-threshold', type=Decimal, default=Decimal('0.08'),
+                        help='Stop-loss threshold in percent (default: 0.08)')
+    parser.add_argument('--take-profit-threshold', type=Decimal, default=Decimal('0.12'),
+                        help='Take-profit threshold in percent (default: 0.12)')
+
+    # Maker aggressiveness flags (default: aggressive half-tick)
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument('--maker-aggressive', dest='maker_aggressive', action='store_true',
+                       help='Use half-tick aggressive maker pricing (default)')
+    group.add_argument('--no-maker-aggressive', dest='maker_aggressive', action='store_false',
+                       help='Do not use maker aggressiveness; use original tick offsets')
+    parser.set_defaults(maker_aggressive=True)
+
+    # Global wide-range SL/TP (percent). Example: 5 means 5% move triggers global SL
+    parser.add_argument('--global-stop-loss', type=Decimal, default=Decimal('5.0'),
+                        help='Global stop-loss percent (default: 5.0)')
+    parser.add_argument('--global-take-profit', type=Decimal, default=Decimal('10.0'),
+                        help='Global take-profit percent (default: 10.0)')
+
     return parser.parse_args()
 
 
@@ -83,6 +103,14 @@ async def main():
         stop_price=Decimal(args.stop_price),
         pause_price=Decimal(args.pause_price),
         aster_boost=args.aster_boost
+        ,
+        stop_loss_threshold=args.stop_loss_threshold,
+        take_profit_threshold=args.take_profit_threshold
+        ,
+        maker_aggressive=args.maker_aggressive
+        ,
+        global_stop_loss_percent=args.global_stop_loss,
+        global_take_profit_percent=args.global_take_profit
     )
 
     # Create and run the bot

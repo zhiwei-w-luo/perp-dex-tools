@@ -229,6 +229,16 @@ class BackpackClient(BaseExchangeClient):
             quantity = order_data.get('q', '0')
             price = order_data.get('p', '0')
             fill_quantity = order_data.get('z', '0')
+            
+            # Store last order update with timestamp for status checking
+            self.last_order_update = {
+                'order_id': order_id,
+                'status': 'FILLED' if (event_type == 'orderFill' and quantity == fill_quantity) else 'PARTIAL',
+                'timestamp': time.time(),
+                'side': side,
+                'quantity': quantity,
+                'fill_quantity': fill_quantity
+            }
 
             # Only process orders for our symbol
             if symbol != self.config.contract_id:
@@ -317,12 +327,22 @@ class BackpackClient(BaseExchangeClient):
                 return OrderResult(success=False, error_message='Invalid bid/ask prices')
 
             if direction == 'buy':
-                # For buy orders, place slightly below best ask to ensure execution
-                order_price = best_ask - self.config.tick_size
+                # For buy orders, choose price based on maker_aggressive flag
+                if getattr(self.config, 'maker_aggressive', True):
+                    # slightly below best ask (half-tick toward market)
+                    order_price = best_ask - (self.config.tick_size / Decimal(2))
+                else:
+                    # original, more passive behavior (one full tick)
+                    order_price = best_ask - self.config.tick_size
                 side = 'Bid'
             else:
-                # For sell orders, place slightly above best bid to ensure execution
-                order_price = best_bid + self.config.tick_size
+                # For sell orders, choose price based on maker_aggressive flag
+                if getattr(self.config, 'maker_aggressive', True):
+                    # slightly above best bid (half-tick toward market)
+                    order_price = best_bid + (self.config.tick_size / Decimal(2))
+                else:
+                    # original, more passive behavior (one full tick)
+                    order_price = best_bid + self.config.tick_size
                 side = 'Ask'
 
             # Place the order using Backpack SDK (post-only to ensure maker order)
@@ -342,6 +362,27 @@ class BackpackClient(BaseExchangeClient):
             if 'code' in order_result:
                 message = order_result.get('message', 'Unknown error')
                 self.logger.log(f"[OPEN] Error placing order: {message}", "ERROR")
+
+                # If insufficient margin, attempt to place a close order to free margin
+                if 'Insufficient margin to open a new order' in message:
+                    try:
+                        self.logger.log("Insufficient margin detected; attempting to place close order to free margin", "INFO")
+                        close_side = getattr(self.config, 'close_order_side', None)
+                        if not close_side:
+                            return OrderResult(success=False, error_message='Insufficient margin and no close_order_side configured')
+
+                        # Choose an aggressive close price based on side to increase chance of execution
+                        if close_side.lower() == 'sell':
+                            close_price = self.round_to_tick(best_bid + self.config.tick_size)
+                        else:
+                            close_price = self.round_to_tick(best_ask - self.config.tick_size)
+
+                        close_res = await self.place_close_order(contract_id, self.config.quantity, close_price, close_side)
+                        return close_res
+                    except Exception as e:
+                        self.logger.log(f"Failed to place close order after insufficient margin error: {e}", "ERROR")
+                        return OrderResult(success=False, error_message=str(e))
+
                 continue
 
             # Extract order ID from response
@@ -351,14 +392,65 @@ class BackpackClient(BaseExchangeClient):
                 return OrderResult(success=False, error_message='No order ID in response')
 
             # Order successfully placed
-            return OrderResult(
-                success=True,
-                order_id=order_id,
-                side=side.lower(),
-                size=quantity,
-                price=order_price,
-                status='New'
-            )
+            # Wait up to timeout for any fills; if no fills after timeout, cancel and place a market order
+            timeout_seconds = getattr(self.config, 'order_timeout_seconds', 30)
+
+            try:
+                # Poll order info for up to timeout_seconds
+                start = time.time()
+                filled = Decimal(0)
+                while time.time() - start < timeout_seconds:
+                    await asyncio.sleep(1)
+                    info = await self.get_order_info(order_id)
+                    if info is None:
+                        # Order not found -> treat as no-fill and continue waiting
+                        continue
+                    filled = Decimal(info.filled_size) if info.filled_size is not None else Decimal(0)
+                    if filled >= Decimal(quantity):
+                        # Fully filled within timeout
+                        return OrderResult(
+                            success=True,
+                            order_id=order_id,
+                            side=side.lower(),
+                            size=quantity,
+                            price=order_price,
+                            status='FILLED'
+                        )
+
+                # Timeout expired. Only act if there was no fill at all.
+                if filled == 0:
+                    self.logger.log(f"Order {order_id} not filled after {timeout_seconds}s, cancelling and placing market order", "INFO")
+                    # Cancel the original order
+                    try:
+                        await self.cancel_order(order_id)
+                    except asyncio.CancelledError:
+                        self.logger.log(f"Order wait cancelled while cancelling order {order_id}", "WARNING")
+                        return OrderResult(success=False, error_message='Cancelled')
+
+                    # Place market order to take liquidity
+                    market_result = self.account_client.execute_order(
+                        symbol=contract_id,
+                        side=side,
+                        order_type=OrderTypeEnum.MARKET,
+                        quantity=str(quantity),
+                        post_only=False
+                    )
+
+                    if not market_result or 'code' in market_result:
+                        return OrderResult(success=False, error_message='Failed to place market replacement order')
+
+                    new_order_id = market_result.get('id')
+                    return OrderResult(success=True, order_id=new_order_id, side=side.lower(), size=quantity, price=Decimal(0), status='FILLED')
+                else:
+                    # Partial fill but not full; return current status
+                    return OrderResult(success=True, order_id=order_id, side=side.lower(), size=quantity, price=order_price, status='PARTIALLY_FILLED')
+
+            except asyncio.CancelledError:
+                self.logger.log(f"place_open_order cancelled for order {order_id}", "WARNING")
+                return OrderResult(success=False, error_message='Cancelled')
+            except Exception as e:
+                self.logger.log(f"Error while waiting for order {order_id}: {e}", "ERROR")
+                return OrderResult(success=False, error_message=str(e))
 
         return OrderResult(success=False, error_message='Max retries exceeded')
 
@@ -381,12 +473,20 @@ class BackpackClient(BaseExchangeClient):
                 order_side = 'Ask'
                 # For sell orders, ensure price is above best bid to be a maker order
                 if price <= best_bid:
-                    adjusted_price = best_bid + self.config.tick_size
+                    if getattr(self.config, 'maker_aggressive', True):
+                        # slightly more aggressive half-tick toward market
+                        adjusted_price = best_bid + (self.config.tick_size / Decimal(2))
+                    else:
+                        # original behavior: full tick
+                        adjusted_price = best_bid + self.config.tick_size
             elif side.lower() == 'buy':
                 order_side = 'Bid'
                 # For buy orders, ensure price is below best ask to be a maker order
                 if price >= best_ask:
-                    adjusted_price = best_ask - self.config.tick_size
+                    if getattr(self.config, 'maker_aggressive', True):
+                        adjusted_price = best_ask - (self.config.tick_size / Decimal(2))
+                    else:
+                        adjusted_price = best_ask - self.config.tick_size
 
             adjusted_price = self.round_to_tick(adjusted_price)
             # Place the order using Backpack SDK (post-only to avoid taker fees)
@@ -415,14 +515,62 @@ class BackpackClient(BaseExchangeClient):
                 return OrderResult(success=False, error_message='No order ID in response')
 
             # Order successfully placed
-            return OrderResult(
-                success=True,
-                order_id=order_id,
-                side=side.lower(),
-                size=quantity,
-                price=adjusted_price,
-                status='New'
-            )
+            # Order successfully placed
+            # Wait up to timeout for any fills; if no fills after timeout, cancel and place a market order
+            timeout_seconds = getattr(self.config, 'order_timeout_seconds', 30)
+
+            try:
+                start = time.time()
+                filled = Decimal(0)
+                while time.time() - start < timeout_seconds:
+                    await asyncio.sleep(1)
+                    info = await self.get_order_info(order_id)
+                    if info is None:
+                        continue
+                    filled = Decimal(info.filled_size) if info.filled_size is not None else Decimal(0)
+                    if filled >= Decimal(quantity):
+                        return OrderResult(
+                            success=True,
+                            order_id=order_id,
+                            side=side.lower(),
+                            size=quantity,
+                            price=adjusted_price,
+                            status='FILLED'
+                        )
+
+                # Timeout expired
+                if filled == 0:
+                    self.logger.log(f"Close order {order_id} not filled after {timeout_seconds}s, cancelling and placing market order", "INFO")
+                    try:
+                        await self.cancel_order(order_id)
+                    except asyncio.CancelledError:
+                        self.logger.log(f"place_close_order cancelled while cancelling order {order_id}", "WARNING")
+                        return OrderResult(success=False, error_message='Cancelled')
+
+                    # Determine API side for market order
+                    api_side = order_side
+                    market_result = self.account_client.execute_order(
+                        symbol=contract_id,
+                        side=api_side,
+                        order_type=OrderTypeEnum.MARKET,
+                        quantity=str(quantity),
+                        post_only=False
+                    )
+
+                    if not market_result or 'code' in market_result:
+                        return OrderResult(success=False, error_message='Failed to place market replacement close order')
+
+                    new_order_id = market_result.get('id')
+                    return OrderResult(success=True, order_id=new_order_id, side=side.lower(), size=quantity, price=Decimal(0), status='FILLED')
+                else:
+                    return OrderResult(success=True, order_id=order_id, side=side.lower(), size=quantity, price=adjusted_price, status='PARTIALLY_FILLED')
+
+            except asyncio.CancelledError:
+                self.logger.log(f"place_close_order cancelled for order {order_id}", "WARNING")
+                return OrderResult(success=False, error_message='Cancelled')
+            except Exception as e:
+                self.logger.log(f"Error while waiting for close order {order_id}: {e}", "ERROR")
+                return OrderResult(success=False, error_message=str(e))
 
         return OrderResult(success=False, error_message='Max retries exceeded for close order')
 
@@ -438,9 +586,39 @@ class BackpackClient(BaseExchangeClient):
             if not cancel_result:
                 return OrderResult(success=False, error_message='Failed to cancel order')
             if 'code' in cancel_result:
+                message = cancel_result.get('message', 'Unknown error')
                 self.logger.log(
-                    f"[CLOSE] Failed to cancel order {order_id}: {cancel_result.get('message', 'Unknown error')}", "ERROR")
-                filled_size = self.config.quantity
+                    f"[CLOSE] Failed to cancel order {order_id}: {message}", "WARNING")
+
+                # Handle 'Order not found' more intelligently: it can mean the order was filled
+                # or removed by the exchange. Try to infer executed quantity before giving up.
+                if 'Order not found' in message or 'order not found' in message.lower():
+                    try:
+                        # Try to get order info (may return None)
+                        info = await self.get_order_info(order_id)
+                        if info is not None:
+                            filled_size = Decimal(info.filled_size)
+                            self.logger.log(f"Inferred filled_size from get_order_info: {filled_size}", "INFO")
+                            return OrderResult(success=True, filled_size=filled_size)
+
+                        # Fallback: query current account positions and assume at most the order quantity was filled
+                        pos = await self.get_account_positions()
+                        # Use min(order quantity, current position) as heuristic filled size
+                        heuristic_filled = min(Decimal(self.config.quantity), Decimal(pos))
+                        self.logger.log(f"Order not found; using heuristic filled_size={heuristic_filled} based on current position {pos}", "INFO")
+                        return OrderResult(success=True, filled_size=heuristic_filled)
+
+                    except Exception as e:
+                        self.logger.log(f"Error while inferring filled size after 'Order not found': {e}", "ERROR")
+                        return OrderResult(success=False, error_message=str(e))
+                else:
+                    # Other error codes: try to extract executedQuantity if present, otherwise assume no fill
+                    executed = cancel_result.get('executedQuantity')
+                    if executed is not None:
+                        filled_size = Decimal(executed)
+                    else:
+                        filled_size = Decimal(0)
+                    return OrderResult(success=True, filled_size=filled_size)
             else:
                 filled_size = Decimal(cancel_result.get('executedQuantity', 0))
             return OrderResult(success=True, filled_size=filled_size)
@@ -512,6 +690,41 @@ class BackpackClient(BaseExchangeClient):
                 position_amt = abs(Decimal(position.get('netQuantity', 0)))
                 break
         return position_amt
+
+    async def place_market_order(self, contract_id: str, quantity: Decimal, side: str) -> OrderResult:
+        """Place a market order to immediately execute."""
+        try:
+            # Convert side to API format
+            api_side = 'Bid' if side.lower() == 'buy' else 'Ask'
+            
+            # Place market order
+            order_result = self.account_client.execute_order(
+                symbol=contract_id,
+                side=api_side,
+                order_type=OrderTypeEnum.MARKET,
+                quantity=str(quantity),
+                post_only=False
+            )
+
+            if not order_result or 'code' in order_result:
+                error_msg = order_result.get('message', 'Unknown error') if order_result else 'Failed to place market order'
+                return OrderResult(success=False, error_message=error_msg)
+
+            order_id = order_result.get('id')
+            if not order_id:
+                return OrderResult(success=False, error_message='No order ID in response')
+
+            return OrderResult(
+                success=True,
+                order_id=order_id,
+                side=side.lower(),
+                size=quantity,
+                price=Decimal(0),  # Market order, price not known in advance
+                status='FILLED'    # Assume market orders fill immediately
+            )
+
+        except Exception as e:
+            return OrderResult(success=False, error_message=str(e))
 
     async def get_contract_attributes(self) -> Tuple[str, Decimal]:
         """Get contract ID for a ticker."""

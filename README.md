@@ -144,10 +144,11 @@ python runbot.py --exchange edgex --ticker BTC --quantity 0.05 --take-profit 0.0
 
 ### Backpack 交易所：
 
-ETH 永续合约：
+SOL 永续合约：
 
 ```bash
-python runbot.py --exchange backpack --ticker ETH --quantity 0.1 --take-profit 0.02 --max-orders 40 --wait-time 450
+env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u http_proxy -u https_proxy -u all_proxy \
+python3 runbot.py --exchange backpack --ticker SOL --quantity 0.17 --take-profit 0.02 --max-orders 10 --wait-time 450
 ```
 
 ETH 永续合约（带网格步长控制）：

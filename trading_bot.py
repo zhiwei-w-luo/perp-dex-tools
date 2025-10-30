@@ -31,6 +31,14 @@ class TradingConfig:
     stop_price: Decimal
     pause_price: Decimal
     aster_boost: bool
+    # Stop-loss and take-profit thresholds (percent). Example: 0.08 means 0.08%
+    stop_loss_threshold: Decimal = Decimal('0.08')
+    take_profit_threshold: Decimal = Decimal('0.12')
+    # Whether to use a slightly more aggressive maker price (half-tick toward market)
+    maker_aggressive: bool = True
+    # Global (wide-range) stop-loss / take-profit in percent (e.g. 5 means 5%)
+    global_stop_loss_percent: Decimal = Decimal('5.0')
+    global_take_profit_percent: Decimal = Decimal('10.0')
 
     @property
     def close_order_side(self) -> str:
@@ -76,6 +84,8 @@ class TradingBot:
         self.last_open_order_time = 0
         self.last_log_time = 0
         self.current_order_status = None
+        # Last filled open order price (used for SL/TP checks)
+        self.last_filled_price = None
         self.order_filled_event = asyncio.Event()
         self.order_canceled_event = asyncio.Event()
         self.shutdown_requested = False
@@ -117,6 +127,12 @@ class TradingBot:
                 if status == 'FILLED':
                     if order_type == "OPEN":
                         self.order_filled_amount = filled_size
+                        try:
+                            # try to capture filled price when provided
+                            self.last_filled_price = Decimal(message.get('price'))
+                        except Exception:
+                            # ignore if price is missing or invalid
+                            pass
                         # Ensure thread-safe interaction with asyncio event loop
                         if self.loop is not None:
                             self.loop.call_soon_threadsafe(self.order_filled_event.set)
@@ -213,7 +229,14 @@ class TradingBot:
 
             # Handle order result
             return await self._handle_order_result(order_result)
-
+        except asyncio.CancelledError:
+            # Task was cancelled (e.g. Ctrl+C). Attempt graceful shutdown and stop placing new orders.
+            self.logger.log("Order placement cancelled (task cancelled). Initiating graceful shutdown.", "WARNING")
+            try:
+                await self.graceful_shutdown("User interruption (task cancelled)")
+            except Exception:
+                pass
+            return False
         except Exception as e:
             self.logger.log(f"Error placing order: {e}", "ERROR")
             self.logger.log(f"Traceback: {traceback.format_exc()}", "ERROR")
@@ -225,6 +248,12 @@ class TradingBot:
         filled_price = order_result.price
 
         if self.order_filled_event.is_set() or order_result.status == 'FILLED':
+            # record filled price for P&L/SL/TP checks
+            try:
+                if filled_price is not None:
+                    self.last_filled_price = Decimal(filled_price)
+            except Exception:
+                pass
             if self.config.aster_boost:
                 close_order_result = await self.exchange_client.place_market_order(
                     self.config.contract_id,
@@ -308,64 +337,45 @@ class TradingBot:
 
         return False
 
+    async def _clear_existing_position(self):
+        """Clear any existing position using market orders."""
+        position_amt = await self.exchange_client.get_account_positions()
+        if position_amt > 0:
+            self.logger.log(f"Found existing position of {position_amt}, attempting to close with market order", "INFO")
+            # Determine the side for closing the position
+            close_side = self.config.close_order_side
+            try:
+                # Place market order to close position
+                close_result = await self.exchange_client.place_market_order(
+                    self.config.contract_id,
+                    position_amt,
+                    close_side
+                )
+                if close_result.success:
+                    self.logger.log(f"Successfully closed existing position with market order", "INFO")
+                    # Wait a moment for the position to be updated
+                    await asyncio.sleep(2)
+                    return True
+                else:
+                    self.logger.log(f"Failed to close existing position: {close_result.error_message}", "ERROR")
+                    return False
+            except Exception as e:
+                self.logger.log(f"Error while closing existing position: {e}", "ERROR")
+                return False
+        return True
+
     async def _log_status_periodically(self):
         """Log status information periodically, including positions."""
-        if time.time() - self.last_log_time > 60 or self.last_log_time == 0:
+        if time.time() - self.last_log_time > 30 or self.last_log_time == 0:
             print("--------------------------------")
-            try:
-                # Get active orders
-                active_orders = await self.exchange_client.get_active_orders(self.config.contract_id)
-
-                # Filter close orders
-                self.active_close_orders = []
-                for order in active_orders:
-                    if order.side == self.config.close_order_side:
-                        self.active_close_orders.append({
-                            'id': order.order_id,
-                            'price': order.price,
-                            'size': order.size
-                        })
-
-                # Get positions
-                position_amt = await self.exchange_client.get_account_positions()
-
-                # Calculate active closing amount
-                active_close_amount = sum(
-                    Decimal(order.get('size', 0))
-                    for order in self.active_close_orders
-                    if isinstance(order, dict)
-                )
-
-                self.logger.log(f"Current Position: {position_amt} | Active closing amount: {active_close_amount} | "
-                                f"Order quantity: {len(self.active_close_orders)}")
-                self.last_log_time = time.time()
-                # Check for position mismatch
-                if abs(position_amt - active_close_amount) > (2 * self.config.quantity):
-                    error_message = f"\n\nERROR: [{self.config.exchange.upper()}_{self.config.ticker.upper()}] "
-                    error_message += "Position mismatch detected\n"
-                    error_message += "###### ERROR ###### ERROR ###### ERROR ###### ERROR #####\n"
-                    error_message += "Please manually rebalance your position and take-profit orders\n"
-                    error_message += "请手动平衡当前仓位和正在关闭的仓位\n"
-                    error_message += f"current position: {position_amt} | active closing amount: {active_close_amount} | "f"Order quantity: {len(self.active_close_orders)}\n"
-                    error_message += "###### ERROR ###### ERROR ###### ERROR ###### ERROR #####\n"
-                    self.logger.log(error_message, "ERROR")
-
-                    await self._lark_bot_notify(error_message.lstrip())
-
-                    if not self.shutdown_requested:
-                        self.shutdown_requested = True
-
-                    mismatch_detected = True
-                else:
-                    mismatch_detected = False
-
-                return mismatch_detected
-
-            except Exception as e:
-                self.logger.log(f"Error in periodic status check: {e}", "ERROR")
-                self.logger.log(f"Traceback: {traceback.format_exc()}", "ERROR")
-
-            print("--------------------------------")
+            # Check if we have recently filled orders from websocket updates
+            recently_filled = False
+            if hasattr(self.exchange_client, 'ws_manager') and hasattr(self.exchange_client.ws_manager, 'last_order_update'):
+                last_update = self.exchange_client.ws_manager.last_order_update
+                if last_update and time.time() - last_update.get('timestamp', 0) < 60:
+                    if last_update.get('status') == 'FILLED':
+                        recently_filled = True
+                        self.logger.log(f"Detected recent fill (order {last_update.get('order_id')})", "INFO")
 
     async def _meet_grid_step_condition(self) -> bool:
         if self.active_close_orders:
@@ -457,7 +467,49 @@ class TradingBot:
 
             # Main trading loop
             while not self.shutdown_requested:
-                # Update active orders
+                # Get positions first
+                position_amt = await self.exchange_client.get_account_positions()
+                
+                # If we have a position but no active orders, clear it first
+                if position_amt > 0:
+                    # Check unrealized P&L against thresholds and close immediately if triggered
+                    try:
+                        if self.last_filled_price is not None and self.last_filled_price > 0:
+                            best_bid, best_ask = await self.exchange_client.fetch_bbo_prices(self.config.contract_id)
+                            if best_bid > 0 and best_ask > 0:
+                                mark_price = (best_bid + best_ask) / 2
+                                entry_price = Decimal(self.last_filled_price)
+                                if self.config.direction == 'buy':
+                                    profit_pct = (Decimal(mark_price) - entry_price) / entry_price * 100
+                                else:
+                                    profit_pct = (entry_price - Decimal(mark_price)) / entry_price * 100
+
+                                # Stop-loss: loss >= threshold -> close
+                                if profit_pct <= -abs(self.config.stop_loss_threshold):
+                                    self.logger.log(f"Position loss {profit_pct:.4f}% <= -{self.config.stop_loss_threshold}%, closing at market", "WARNING")
+                                    await self.exchange_client.place_market_order(self.config.contract_id, position_amt, self.config.close_order_side)
+                                    # after market close, reset last_filled_price to avoid duplicate actions
+                                    self.last_filled_price = None
+                                    # re-evaluate positions after a short delay
+                                    await asyncio.sleep(1)
+                                    position_amt = await self.exchange_client.get_account_positions()
+                                # Take-profit: profit >= threshold -> close
+                                elif profit_pct >= abs(self.config.take_profit_threshold):
+                                    self.logger.log(f"Position profit {profit_pct:.4f}% >= {self.config.take_profit_threshold}%, closing at market", "INFO")
+                                    await self.exchange_client.place_market_order(self.config.contract_id, position_amt, self.config.close_order_side)
+                                    self.last_filled_price = None
+                                    await asyncio.sleep(1)
+                                    position_amt = await self.exchange_client.get_account_positions()
+                    except Exception as e:
+                        self.logger.log(f"Error checking SL/TP conditions: {e}", "ERROR")
+
+                    await self._clear_existing_position()
+                    # Recheck position after clearing
+                    position_amt = await self.exchange_client.get_account_positions()
+                    if position_amt > 0:
+                        self.logger.log(f"Warning: Position {position_amt} still exists after clearing attempt", "WARNING")
+
+                # Get active orders
                 active_orders = await self.exchange_client.get_active_orders(self.config.contract_id)
 
                 # Filter close orders
@@ -469,6 +521,115 @@ class TradingBot:
                             'price': order.price,
                             'size': order.size
                         })
+
+                # SL/TP check: if we have an open position and a recorded fill price,
+                # evaluate unrealized P&L and close at market if thresholds are hit.
+                if position_amt > 0 and self.last_filled_price is not None:
+                    try:
+                        best_bid, best_ask = await self.exchange_client.fetch_bbo_prices(self.config.contract_id)
+                        # use mid price as mark
+                        mark_price = (best_bid + best_ask) / Decimal(2)
+                        last_price = Decimal(self.last_filled_price)
+
+                        if last_price > 0:
+                            if self.config.direction == 'buy':
+                                profit_frac = (mark_price - last_price) / last_price
+                            else:
+                                profit_frac = (last_price - mark_price) / last_price
+
+                            stop_frac = (self.config.stop_loss_threshold or Decimal(0)) / Decimal(100)
+                            tp_frac = (self.config.take_profit_threshold or Decimal(0)) / Decimal(100)
+
+                            if profit_frac <= -stop_frac:
+                                # Stop-loss: close position at market
+                                self.logger.log(f"Position loss {profit_frac:.6f} <= -{stop_frac:.6f}, executing market close", "WARNING")
+                                close_side = self.config.close_order_side
+                                try:
+                                    res = await self.exchange_client.place_market_order(self.config.contract_id, position_amt, close_side)
+                                    if res.success:
+                                        self.logger.log(f"Closed position {position_amt} at market for SL", "INFO")
+                                        # clear last filled price so we don't repeatedly trigger
+                                        self.last_filled_price = None
+                                        # give markets/positions a moment to update
+                                        await asyncio.sleep(1)
+                                        position_amt = await self.exchange_client.get_account_positions()
+                                    else:
+                                        self.logger.log(f"Failed to close position for SL: {res.error_message}", "ERROR")
+                                except Exception as e:
+                                    self.logger.log(f"Error executing market close for SL: {e}", "ERROR")
+
+                            elif profit_frac >= tp_frac:
+                                # Take-profit: close position at market
+                                self.logger.log(f"Position profit {profit_frac:.6f} >= {tp_frac:.6f}, executing market close", "INFO")
+                                close_side = self.config.close_order_side
+                                try:
+                                    res = await self.exchange_client.place_market_order(self.config.contract_id, position_amt, close_side)
+                                    if res.success:
+                                        self.logger.log(f"Closed position {position_amt} at market for TP", "INFO")
+                                        self.last_filled_price = None
+                                        await asyncio.sleep(1)
+                                        position_amt = await self.exchange_client.get_account_positions()
+                                    else:
+                                        self.logger.log(f"Failed to close position for TP: {res.error_message}", "ERROR")
+                                except Exception as e:
+                                    self.logger.log(f"Error executing market close for TP: {e}", "ERROR")
+                    except Exception as e:
+                        self.logger.log(f"Error checking SL/TP: {e}", "ERROR")
+
+                # Global wide-range SL/TP check (超大区间止损/止盈)
+                # If the global thresholds are hit, close position at market and shut down the bot.
+                try:
+                    if position_amt > 0 and self.last_filled_price is not None:
+                        best_bid, best_ask = await self.exchange_client.fetch_bbo_prices(self.config.contract_id)
+                        if best_bid > 0 and best_ask > 0:
+                            mark_price = (best_bid + best_ask) / Decimal(2)
+                            entry_price = Decimal(self.last_filled_price)
+                            if self.config.direction == 'buy':
+                                global_profit_frac = (mark_price - entry_price) / entry_price
+                            else:
+                                global_profit_frac = (entry_price - mark_price) / entry_price
+
+                            global_sl_frac = (self.config.global_stop_loss_percent or Decimal(0)) / Decimal(100)
+                            global_tp_frac = (self.config.global_take_profit_percent or Decimal(0)) / Decimal(100)
+
+                            if global_profit_frac <= -global_sl_frac:
+                                msg = (f"GLOBAL STOP-LOSS TRIGGERED: profit {global_profit_frac:.6f} <= -{global_sl_frac:.6f}. "
+                                       f"Closing position {position_amt} at market and shutting down.")
+                                self.logger.log(msg, "ERROR")
+                                # close at market
+                                try:
+                                    res = await self.exchange_client.place_market_order(self.config.contract_id, position_amt, self.config.close_order_side)
+                                    if res.success:
+                                        self.logger.log(f"Global SL: closed position {position_amt} at market", "INFO")
+                                    else:
+                                        self.logger.log(f"Global SL: failed to close position: {res.error_message}", "ERROR")
+                                except Exception as e:
+                                    self.logger.log(f"Global SL: error during market close: {e}", "ERROR")
+
+                                # notify and shutdown
+                                await self._lark_bot_notify(msg)
+                                self.shutdown_requested = True
+                                # continue to outer loop to exit gracefully
+                                continue
+
+                            if global_profit_frac >= global_tp_frac:
+                                msg = (f"GLOBAL TAKE-PROFIT TRIGGERED: profit {global_profit_frac:.6f} >= {global_tp_frac:.6f}. "
+                                       f"Closing position {position_amt} at market and shutting down.")
+                                self.logger.log(msg, "INFO")
+                                try:
+                                    res = await self.exchange_client.place_market_order(self.config.contract_id, position_amt, self.config.close_order_side)
+                                    if res.success:
+                                        self.logger.log(f"Global TP: closed position {position_amt} at market", "INFO")
+                                    else:
+                                        self.logger.log(f"Global TP: failed to close position: {res.error_message}", "ERROR")
+                                except Exception as e:
+                                    self.logger.log(f"Global TP: error during market close: {e}", "ERROR")
+
+                                await self._lark_bot_notify(msg)
+                                self.shutdown_requested = True
+                                continue
+                except Exception as e:
+                    self.logger.log(f"Error during global SL/TP check: {e}", "ERROR")
 
                 # Periodic logging
                 mismatch_detected = await self._log_status_periodically()
